@@ -39,42 +39,59 @@ function renderTrack(layerId, data, mode) {
     const layer = document.getElementById(layerId);
     if (!layer) return;
     
-    // Calculate track bounds
-    const trackHeight = layer.parentElement.offsetHeight - 100;
+    // Decrease the track height to leave 200px of "Overflow" space at the bottom 
+    // This gives the 0-point drivers room to form multiple rows
+    const trackHeight = layer.parentElement.offsetHeight - 200;
     const maxPoints = Math.max(...data.map(d => parseFloat(d.points)));
 
-    // 1. Sort highest points to lowest points (Leader goes first)
+    // Sort highest points to lowest points
     const sortedData = [...data].sort((a, b) => b.points - a.points);
 
-    // 2. Track the last Y coordinate used in each of the 5 lanes
-    let laneMemory = [-200, -200, -200, -200, -200]; 
+    const LANE_OFFSETS = ["50%", "75%", "25%", "90%", "10%"];
+    const VERTICAL_GAP = 75; // The required gap between cars to prevent overlap
 
-    sortedData.forEach((entry, index) => {
+    // Store every used Y-coordinate in each lane to check for collisions
+    let lanes = [[], [], [], [], []]; 
+
+    sortedData.forEach((entry) => {
         const points = parseFloat(entry.points);
         const teamId = mode === 'driver' ? entry.Constructors[0].constructorId : entry.Constructor.constructorId;
         const name = mode === 'driver' ? entry.Driver.familyName : entry.Constructor.name;
         const id = mode === 'driver' ? entry.Driver.driverId : entry.Constructor.constructorId;
 
-        // Proportional Y calculation
-        const yPos = maxPoints > 0 ? ((maxPoints - points) / maxPoints) * trackHeight : trackHeight;
+        // Base Y Position
+        let rawY = maxPoints > 0 ? ((maxPoints - points) / maxPoints) * trackHeight : trackHeight;
 
-        // 3. MIDDLE-OUT LOGIC: Find the first available lane from the center outward
+        let placed = false;
+        let finalY = rawY;
         let chosenLane = 0;
-        for (let l = 0; l < LANE_OFFSETS.length; l++) {
-            // Is this lane empty at this Y-height?
-            if (yPos > laneMemory[l] + VERTICAL_BUFFER) {
-                chosenLane = l;
-                break;
+
+        // COLLISION RESOLVER: If a lane is full, try pushing the car down slightly
+        while (!placed) {
+            for (let l = 0; l < LANE_OFFSETS.length; l++) {
+                let collision = false;
+                for (let existingY of lanes[l]) {
+                    if (Math.abs(finalY - existingY) < VERTICAL_GAP) {
+                        collision = true;
+                        break;
+                    }
+                }
+                if (!collision) {
+                    chosenLane = l;
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                // If all 5 lanes are full at this height, push this car down by 25px and loop again
+                finalY += 25; 
             }
         }
-        
-        // If the grid is extremely packed, cycle through as a failsafe
-        if (chosenLane === undefined) chosenLane = index % LANE_OFFSETS.length;
-        
-        // Mark this lane as occupied at this height
-        laneMemory[chosenLane] = yPos;
 
-        // 4. Create or update the car DOM element
+        // Lock in the position for future cars to check against
+        lanes[chosenLane].push(finalY);
+
+        // Update or Create the DOM Element
         let car = document.getElementById(`${mode}-${id}`);
         if (!car) {
             car = document.createElement('div');
@@ -83,13 +100,11 @@ function renderTrack(layerId, data, mode) {
             layer.appendChild(car);
         }
 
-        // Apply Position
         car.style.left = LANE_OFFSETS[chosenLane];
-        // -50% centers the car exactly on the left% percentage mark
-        car.style.transform = `translate(-50%, ${yPos}px)`;
+        car.style.transform = `translate(-50%, ${finalY}px)`;
         
-        // Z-Index: ensure cars lower on points stay visually behind the leaders
-        car.style.zIndex = Math.round(yPos);
+        // Ensure leaders are physically on top of cars with fewer points
+        car.style.zIndex = Math.round(10000 - finalY);
 
         const teamColor = TEAM_CONFIG[teamId]?.color || '#888';
         car.innerHTML = `
@@ -100,7 +115,3 @@ function renderTrack(layerId, data, mode) {
         `;
     });
 }
-
-// Initial load and auto-refresh
-syncData();
-setInterval(syncData, 60000);
